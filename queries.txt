@@ -1,0 +1,100 @@
+/*QUERY1: What was the spending behavior of the top 3 spending customers?*/
+
+WITH t1 AS (
+SELECT c.CustomerId, SUM(i.Total) AS TotalSpending
+FROM Customer c
+JOIN Invoice i
+ON c.CustomerId = i.CustomerId
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 3)
+
+SELECT CustomerId,
+       STRFTIME('%Y', InvoiceDate) AS Year,
+       SUM(Total) AS TotalSpending
+FROM Invoice
+WHERE CustomerId IN (SELECT CustomerId FROM t1)
+GROUP BY 1, 2
+ORDER BY 1, 2;
+--------------------------------------------------------------------
+/*QUERY2: What is the average track length in minutes per genre?*/
+
+SELECT g.Name Genre_Name,
+       ROUND(AVG(t.Milliseconds/60000),2) AS Avg_Track_Length
+FROM Genre g
+JOIN Track t
+ON g.GenreId = t.GenreId
+GROUP BY 1
+ORDER BY 2;
+--------------------------------------------------------------------
+/*Query 3: How many albums are selling below average?*/
+
+DROP TABLE IF EXISTS temp_t1;
+CREATE TEMP TABLE temp_t1 (
+Album_Name varchar(100),
+UnitPrice float(10,2),
+Quantity float(10,2));
+
+INSERT INTO temp_t1
+SELECT al.Title AS Album_Name,
+       inv.UnitPrice,
+       SUM(inv.Quantity) AS Quantity
+FROM Artist ar
+JOIN Album al
+ON ar.ArtistId = al.ArtistId
+JOIN Track tr
+ON al.AlbumId = tr. AlbumId
+JOIN InvoiceLine inv
+ON tr.TrackId = inv.TrackId
+GROUP BY 1, 2;
+
+SELECT UnitPrice*Quantity AS Total_Sales,
+       COUNT(Album_Name) AS Num_Albums
+FROM temp_t1
+WHERE Total_Sales < (SELECT AVG(UnitPrice*Quantity) FROM temp_t1)
+GROUP BY 1
+ORDER BY 1;
+--------------------------------------------------------------------
+/*QUERY4: What is the effect of track length on sales?*/
+
+DROP TABLE IF EXISTS temp_t1;
+CREATE TEMP TABLE IF NOT EXISTS temp_t1 (
+Limit1 float(10,2),
+Limit2 float(10,2),
+Limit3 float(10,2),
+Limit4 float(10,2));
+
+INSERT INTO temp_t1
+SELECT MIN(Milliseconds) AS Limit1,
+      (AVG(Milliseconds)-MIN(Milliseconds))/2 AS Limit2,
+      (MAX(Milliseconds)-AVG(Milliseconds))/2 AS Limit3,
+       MAX(Milliseconds) AS Limit4
+FROM Track;
+
+WITH categ AS (
+		SELECT TrackId,
+		       CASE WHEN t.Milliseconds <
+				(SELECT Limit2 FROM temp_t1) THEN 'Short'
+			    WHEN t.Milliseconds <
+				(SELECT Limit3 FROM temp_t1) THEN 'Medium'
+			    WHEN t.Milliseconds <
+				(SELECT Limit4 FROM temp_t1) THEN 'Long'
+                        END AS LengthCateg
+		FROM Track t)
+
+SELECT CASE WHEN c.LengthCateg = 'Short' THEN (SELECT ROUND(Limit1/60000,2) FROM temp_t1)
+            WHEN c.LengthCateg = 'Medium' THEN (SELECT ROUND(Limit2/60000,2) FROM temp_t1)
+            WHEN c.LengthCateg = 'Long' THEN (SELECT ROUND(Limit3/60000,2) FROM temp_t1)
+       END AS From_Minutes,
+       CASE WHEN c.LengthCateg = 'Short' THEN (SELECT ROUND(Limit2/60000,2) FROM temp_t1)
+            WHEN c.LengthCateg = 'Medium' THEN (SELECT ROUND(Limit3/60000,2) FROM temp_t1)
+            WHEN c.LengthCateg = 'Long' THEN (SELECT ROUND(Limit4/60000,2) FROM temp_t1)
+       END AS To_Minutes,
+       c.LengthCateg,
+       ROUND(SUM(i.UnitPrice*i.Quantity),2) AS TotalPrice
+FROM categ c
+JOIN InvoiceLine i
+ON c.TrackId = i.TrackId
+GROUP BY 3
+HAVING c.LengthCateg IS NOT Null
+ORDER BY 4;
